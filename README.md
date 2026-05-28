@@ -11,16 +11,16 @@ This page provides access to all scripts used in the generation of thematic coll
 
 ---
 
-## 🌱 LAND USE AND LAND COVER (LULC)
+## 🗺️ LAND USE AND LAND COVER (LULC)
 
 ### 📦 Collections
 
-- [**Collection 1**](https://github.com/mapbiomas/mexico-all-initiatives/collection-1)
+- [**Collection 1**](https://github.com/mapbiomas/mexico-all-initiatives/lulc/tree/collection-1)
 
 ### 🌍 Current Cross-Cutting Themes in Mexico
 
-- [**Mangrove**](https://github.com/mapbiomas/mexico-all-initiatives/mangrove)
-- [**Urban Area**](https://github.com/mapbiomas/mexico-all-initiatives/urban-area)
+- [**Mangrove**](https://github.com/mapbiomas/mexico-all-initiatives/mangrove/tree/collection-1)
+- [**Urban Area**](https://github.com/mapbiomas/mexico-all-initiatives/urban-area/tree/collection-1)
 
 ---
 
@@ -30,14 +30,22 @@ Integration and Post Classification Filters of LULC data:
 
 - [**Mapbiomas LULC Integration and Filters**](https://github.com/mapbiomas-brazil/user-toolkit)
 
+---
+
 ## 📊 Analysis
 
 Tools for assessing the accuracy of our data products (under development):
 
 - [**Accuracy**](https://github.com/mapbiomas/mexico-accuracy)
 
+---
+
 ## 🗄️ Assets
 
 - [**MapBiomas Mexico Collections**](https://github.com/mapbiomas/.github/blob/main/assets/mexico.md)
+- [**Annual Mosaics script**](https://github.com/mapbiomas/countries-mosaics/blob/main/countries/mapbiomas_Mexico_mosaics_collection_1_landsat_v1.py)
+
+---
 
 📌 *This repository structure is under continuous improvement.*
+🔜 *Stay tuned*
