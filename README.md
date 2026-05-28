@@ -15,12 +15,12 @@ This page provides access to all scripts used in the generation of thematic coll
 
 ### 📦 Collections
 
-- [**Collection 1**](https://github.com/mapbiomas/mexico-all-initiatives/collection-1)
+- [**Collection 1**](https://github.com/mapbiomas/mexico-all-initiatives/tree/collection-1)
 
 ### 🌍 Current Cross-Cutting Themes in Mexico
 
-- [**Mangrove**](https://github.com/mapbiomas/mexico-all-initiatives/mangrove)
-- [**Urban Area**](https://github.com/mapbiomas/mexico-all-initiatives/urban-area)
+- [**Mangrove**](https://github.com/mapbiomas/mexico-all-initiatives/tree/collection-1/mangrove)
+- [**Urban Area**](https://github.com/mapbiomas/mexico-all-initiatives/tree/collection-1/urban-area)
 
 ---
 
