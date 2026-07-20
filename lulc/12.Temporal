@@ -1,0 +1,295 @@
+// Versión script 20/07/2026
+// Temporal filter (3-year window) - NATIONAL PRODUCT
+// Input:  MEX_integration_alequech_gapfill_v1
+
+// Description:
+// Removes single-year class "flicker" using a 3-year moving window: when a
+// pixel holds class C only in the central year (different in year-1 and year+1),
+// it is replaced with the previous year's class. Applied class by class over
+// the whole series; the first and last years are passed through unchanged.
+
+// Note:
+// The probability branch is disabled (commented) in this run.
+
+// Import aux funcs
+var auxFuncs = require('users/JonathanVSV/Mapbiomas_reg4:0.aux');
+
+// # User variables----
+var country_name = 'MEX';
+var region_name = 3;          // (reference only; input is already national)
+var name_x = 'alequech';
+
+var startYear = 1985,
+    endYear = 2025,
+    yearInterest = 2025;
+
+var tf_3window_version_out = '1';
+
+var years = [1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001,
+            2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018,
+            2019, 2020, 2021, 2022, 2023, 2024, 2025];
+
+// Do not need to move anything else from here on -----
+
+// # Regions (buffered, reference layer)----
+var buffkm = 5;
+var regions = ee.FeatureCollection('projects/mapbiomas-mexico/assets/LAND-COVER/COLLECTION-1/GENERAL/provincias_fisiograficas_mexico_' + buffkm + 'kmbuff');
+print(regions, 'regiones');
+// regions = regions.filterMetadata('Region', 'equals', region_name);
+// Map.addLayer(regions, {}, 'region ' + region_name);
+
+var class_folder = 'projects/mapbiomas-mexico/assets/LAND-COVER/COLLECTION-1/GENERAL/classification-ft/';
+
+// # Input / output----
+// National input (output of the national gapfill)
+var input_path = class_folder + 'MEX_integration_alequech_gapfill_v1';
+// var input_prob_path = class_folder + country_name + '_' + region_name + '_' + name_x + '_probability_gapfill_v' + gap_version_in;
+
+var tf_3window_file_name_out = 'gapfill_temporal';
+
+// # Palette / reference mosaic----
+var Land_collection = ee.ImageCollection('projects/mapbiomas-mosaics/assets/LANDSAT/LULC/MEXICO/mosaics-1');
+var visLandsat = {"bands": ["swir1_median", "nir_median", "red_median"], "min": 0, "max": 5615, "gamma": 1};
+Map.addLayer(Land_collection.filter(ee.Filter.eq('year', yearInterest)).mosaic(), visLandsat, 'Landsat ' + yearInterest);
+
+//var vis = {min: 0, max: 89, palette: auxFuncs.paleta, format: 'png'};
+var Palette = require('users/mapbiomas-global/LULC:LULC_palette.js');
+var vis = Palette.get('vis_LULC');
+// var visProb = {min: 0, max: 1, palette: auxFuncs.viridis, format: 'png'};
+
+// # Read input----
+var class_gap_fill = ee.Image(input_path);
+print('class_gap_fill', class_gap_fill);
+// var prob_gap_fill = ee.Image(input_prob_path);
+
+// class_gap_fill = class_gap_fill.addBands(prob_gap_fill);
+
+Map.addLayer(class_gap_fill.select('classification_' + yearInterest), vis, 'classification input' + yearInterest);
+// Map.addLayer(class_gap_fill.select('probability_' + yearInterest), visProb, 'probability input' + yearInterest);
+
+// # 3-year window filter----
+// Interior years only (first and last are handled separately below)
+var anos = ee.List.sequence(startYear + 1, endYear - 1)
+                  .map(function (y) {
+                        return ee.Number(y).int(); });
+
+var window3y = function (img, classe) {
+                var classWindPre = ee.ImageCollection(anos.map(function (ano) {
+                    ano = ee.Number(ano);
+                    var anoStr = ano.format();
+                    var nomeBanda = ee.String('classification_').cat(anoStr);
+
+                    var class_Ano = img.select(nomeBanda);
+                    var classPrev = img.select(ee.String('classification_').cat(ano.subtract(1).format()));
+                    var classNext = img.select(ee.String('classification_').cat(ano.add(1).format()));
+
+                    // var prob_Ano = img.select(ee.String('probability_').cat(anoStr));
+                    // var probPrev = img.select(ee.String('probability_').cat(ano.subtract(1).format()));
+                    // var probNext = img.select(ee.String('probability_').cat(ano.add(1).format()));
+
+                    // 3-year window mask (boolean condition): class present only
+                    // in the central year -> single-year flicker
+                    var mask_3 = classNext.neq(classe)
+                            .and(class_Ano.eq(classe))
+                            .and(classPrev.neq(classe));
+
+                    // mask_3 now carries the CLASS VALUE of the previous year,
+                    // masked to the pixels meeting the window condition
+                    mask_3 = classPrev.remap([88,89,3,5,66,45,11,15,36,19,9,21,24,25,33,34],
+                                             [88,89,3,5,66,45,11,15,36,19,9,21,24,25,33,34]).updateMask(mask_3);
+
+                    // Classification: replace the flicker with the previous year's class
+                    var class_corr = class_Ano.blend(mask_3.rename(nomeBanda));
+
+                    // FIX: probability must take the PREVIOUS year's PROBABILITY
+                    // at the same pixels (mask_3.mask()), NOT the class value of mask_3.
+                    // Using mask_3 directly contaminated probability with values 3-89.
+                    // var prob_mask = probPrev.updateMask(mask_3.mask());
+                    // var prob_corr = prob_Ano.blend(prob_mask.rename(ee.String('probability_').cat(anoStr)));
+
+                    // return class_corr.addBands(prob_corr);
+                    return class_corr;
+                                                            }));
+
+        var classWind = classWindPre.select('classification_.*').toBands();
+        // var probWind = classWindPre.select('probability_.*').toBands();
+
+        var n = anos.size();
+        var ultimo = ee.Number(anos.get(n.subtract(1))).add(1);
+        var primero = ee.Number(anos.get(0)).subtract(1);
+
+        // Ensure the first and last years are included (passed through untouched)
+        var class_pri = img.select([ee.String('classification_').cat(primero)],
+                                        [ee.String('00_classification_').cat(primero)]);
+        var class_ult = img.select([ee.String('classification_').cat(ultimo)],
+                                        [ee.String('00_classification_').cat(ultimo)]);
+        var class_final = class_pri.addBands(classWind).addBands(class_ult);
+
+        // var prob_pri = img.select([ee.String('probability_').cat(primero)],
+        //                                 [ee.String('00_probability_').cat(primero)]);
+        // var prob_ult = img.select([ee.String('probability_').cat(ultimo)],
+        //                                 [ee.String('00_probability_').cat(ultimo)]);
+        // var prob_final = prob_pri.addBands(probWind).addBands(prob_ult);
+
+        // Strip the sort prefix ("00_") so band names return to classification_YYYY
+        var corrIndx = function (img) {
+              var indxNames = img.bandNames();
+              var bandNames = indxNames.map(function (nome) {
+                  return ee.String(nome).split('_').slice(1).join('_');
+                                                          });
+              return img.select(indxNames, bandNames);
+            };
+        var corrigidaFinal = corrIndx(class_final);
+        // var corrigidaProbFinal = corrIndx(prob_final);
+
+        // return corrigidaFinal.addBands(corrigidaProbFinal);
+        return corrigidaFinal;
+};
+
+// Apply the 3-year window filter for each class (chained)
+var filtered = window3y(class_gap_fill,  88);
+    filtered = window3y(filtered, 89);
+    filtered = window3y(filtered, 3);
+    filtered = window3y(filtered, 5);
+    filtered = window3y(filtered, 66);
+    filtered = window3y(filtered, 45);
+    filtered = window3y(filtered, 11);
+    filtered = window3y(filtered, 15);
+    filtered = window3y(filtered, 36);
+    filtered = window3y(filtered, 19);
+    filtered = window3y(filtered, 9);
+    filtered = window3y(filtered, 21);
+    filtered = window3y(filtered, 24);
+    filtered = window3y(filtered, 25);
+    filtered = window3y(filtered, 33);
+    filtered = window3y(filtered, 34);
+
+print('Output', filtered);
+
+Map.addLayer(class_gap_fill.select('classification_' + yearInterest), vis, 'Input ' + yearInterest, true);
+Map.addLayer(filtered.select('classification_' + yearInterest), vis, 'Filtered classification' + yearInterest, true);
+// Map.addLayer(filtered.select('probability_' + yearInterest), visProb, 'Filtered probability' + yearInterest, true);
+
+// # Export----
+// National output name  (<-- CONFIRM)
+var output_name = 'MEX_integration_alequech_gapfill_temporal_v' + tf_3window_version_out;
+// var output_prob_name = country_name + '_' + region_name + '_' + name_x + '_probability_' + tf_3window_file_name_out + '_v' + tf_3window_version_out;
+print(output_name);
+
+Export.image.toAsset({
+    "image": filtered.select('classification_.*'),
+    'description': output_name,
+    'assetId': class_folder + output_name,
+    "scale": 30,
+    "pyramidingPolicy": {'.default': 'mode'},
+    "maxPixels": 1e13,
+    'region': filtered.geometry().bounds(),
+    overwrite: true
+});
+
+// Probability: 'mean' pyramiding (better than 'mode' for continuous float)
+// Export.image.toAsset({
+//     "image": filtered.select('probability_.*'),
+//     'description': output_prob_name,
+//     'assetId': class_folder + output_prob_name,
+//     "scale": 30,
+//     "pyramidingPolicy": {'.default': 'mean'},
+//     "maxPixels": 1e13,
+//     'region': filtered.geometry().bounds(),
+//     overwrite: true
+// });
+
+// # Legend----
+var legendData = [
+  [88, 'Bosques Templados',                  '1. Bosques'],
+  [89, 'Bosques Tropicales secos',           '1. Bosques'],
+  [3,  'Bosques Tropicales húmedos',         '1. Bosques'],
+  [5,  'Manglares',                          '1. Bosques'],
+  [66, 'Matorrales',                         '2. Veget herbácea y arbustiva'],
+  [45, 'Sabanas y pastizales naturales',     '2. Veget herbácea y arbustiva'],
+  [11, 'Inundables',                         '2. Veget herbácea y arbustiva'],
+  [15, 'Pastizales cultivados e inducidos',  '3. Agropecuario'],
+  [36, 'Cultivo perenne',                    '3. Agropecuario'],
+  [19, 'Cultivos anuales',                   '3. Agropecuario'],
+  [9,  'Plantación forestal',                '3. Agropecuario'],
+  [21, 'Mosaico de usos',                    '3. Agropecuario'],
+  [24, 'Área urbana y construída',           '4. No Vegetado'],
+  [25, 'Áreas sin vegetación',               '4. No Vegetado'],
+  [33, 'Ríos, lagos y mares',                '5. Cuerpos de agua'],
+  [34, 'Glaciares',                          '5. Cuerpos de agua'],
+  [27, 'No observado',                       '6. No observado']
+];
+
+// Legend colors (from the module palette, indexed by class id)
+var moduloPalette = vis.palette;
+var classColors = {
+  3:  moduloPalette[3],
+  5:  moduloPalette[5],
+  9:  moduloPalette[9],
+  11: moduloPalette[11],
+  15: moduloPalette[15],
+  19: moduloPalette[19],
+  21: moduloPalette[21],
+  24: moduloPalette[24],
+  25: moduloPalette[25],
+  27:  moduloPalette[27],
+  33: moduloPalette[33],
+  34: moduloPalette[34],
+  36: moduloPalette[36],
+  45: moduloPalette[45],
+  66: moduloPalette[66],
+  88: moduloPalette[88],
+  89: moduloPalette[89]
+};
+
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px',
+    backgroundColor: 'rgba(255,255,255,0.85)'
+  }
+});
+
+legend.add(ui.Label({
+  value: 'Cubiertas y usos del suelo',
+  style: { fontWeight: 'bold', fontSize: '14px', margin: '0 0 4px 0' }
+}));
+
+var makeRow = function(color, id, name) {
+  return ui.Panel({
+    widgets: [
+      ui.Label({
+        style: {
+          backgroundColor: color,
+          padding: '8px',
+          margin: '0 2px 3px 0',
+          border: '1px solid #999'
+        }
+      }),
+      ui.Label({
+        value: id + ' – ' + name,
+        style: { margin: '0 0 3px 4px', fontSize: '11px' }
+      })
+    ],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+var currentGroup = '';
+for (var i = 0; i < legendData.length; i++) {
+  var id    = legendData[i][0];
+  var name  = legendData[i][1];
+  var group = legendData[i][2];
+
+  if (group !== currentGroup) {
+    legend.add(ui.Label({
+      value: group,
+      style: { fontWeight: 'bold', fontSize: '11px', margin: '6px 0 2px 0', color: '#444' }
+    }));
+    currentGroup = group;
+  }
+
+  legend.add(makeRow(classColors[id], id, name));
+}
+
+Map.add(legend);
