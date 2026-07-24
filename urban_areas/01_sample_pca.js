@@ -1,4 +1,54 @@
 
+/*
+================================================================================
+MAPBIOMAS MEXICO - URBAN TRAINING SAMPLES (EXPANSION V4)
+Collection 1 - Urban theme
+================================================================================
+Description:
+Generates stratified training samples for the urban classifier, per grid
+cell, based on GHS Built-up Surface (JRC/GHSL) reclassified into stable and
+growth periods (1985-2025). Samples are refined via PCA-based outlier
+filtering and combined into a balanced final set (300 urban : 600 non-urban,
+1:2 ratio) per cell.
+
+Workflow:
+  1. Reclassify GHS built surface into 10 classes: stable urban, stable
+     non-urban, and 8 growth periods (1985-1990 ... 2020-2025), using
+     URBAN_THRESHOLD as the built-surface cutoff.
+  2. Compute local growth proportions per period (needed to distribute
+     growth samples proportionally in step 6).
+  3. Draw random seed samples (1500/class) from the stable classes only.
+  4. Extract PCA (PC_urban, from NDBI/UI/NDUI/EBBI) over the seed samples
+     and filter outliers using ±2SD, independently per class.
+  5. Take a base sample from the filtered points (230 urban / 460 non-urban).
+  6. Add extras: growth-period urban points (+70), sampled directly from
+     each period mask proportional to local growth %; and extra non-urban
+     points (+140), drawn from PCA leftovers not used in the base sample.
+  7. Export final samples (900/cell) as a GEE asset and CSV; PCA leftovers
+     are also exported separately (useful for QA or reuse in other cells).
+
+Critical conventions:
+- `celda_id` controls single-cell mode, used for QA/visual review of one
+  cell before running at scale.
+- Stable classes are defined by comparing only the endpoints (1985 vs 2025),
+  not by requiring all intermediate periods to be built/non-built.
+- Sampling uses an oversample + random-sort + limit pattern (sampleFromMask
+  / cellSample) to guarantee the target count even in small mask areas.
+- PCA ±2SD filtering is computed independently for urban and non-urban
+  classes (different mean/SD per class).
+- Seeds are offset per class/step (SEED, SEED+1, SEED+20+i, ...) to keep
+  sampling reproducible while avoiding correlated draws across periods.
+- RUN_BATCH controls the all-grid export block at the end of the script.
+  Keep it FALSE for single-cell QA runs (default). Set to TRUE only when
+  ready to launch export tasks for every cell in the grid.
+
+Output:
+  - .../Samples/expansion_v4/celda_X       (final 900 samples/cell)
+  - .../Samples/pca_sobrantes/celda_X      (PCA leftovers, both classes)
+  - CSV copies → Google Drive, folder "MapBiomas_Mexico_Urban"
+================================================================================
+*/
+
 var lib_pca = require('users/Bfast/mapbiomas:urbano/funciones/lib_pca_urban');
 
 // ============================================================
@@ -7,6 +57,10 @@ var lib_pca = require('users/Bfast/mapbiomas:urbano/funciones/lib_pca_urban');
 
 var celda_id        = 168;    // ← ID of the cell to process
 var URBAN_THRESHOLD = 200;    // m² built-up surface (GHS)
+
+// Set to true only when ready to export the full grid (all cells).
+// Keep false for single-cell QA runs.
+var RUN_BATCH        = false;
 
 // --- Sampling seed ---
 var SEED_SAMPLES    = 1500;   // Random points per stable class
@@ -67,9 +121,11 @@ print('════════════════════════�
 // ============================================================
 
 print('═══════════════════════════════════════════');
-print('  PASO 1: Reclasificación GHS en periodos');
+print('  STEP 1: Reclassification of GHS by periods');
 print('═══════════════════════════════════════════');
 
+// Returns a binary mask (built vs not built) for a given GHS epoch,
+// using URBAN_THRESHOLD as cutoff
 function getUrbanMask(epoch) {
   return ghsBuilt
     .filter(ee.Filter.eq('system:index', String(epoch)))
@@ -88,6 +144,9 @@ var urban2015 = getUrbanMask(2015);
 var urban2020 = getUrbanMask(2020);
 var urban2025 = getUrbanMask(2025);
 
+// Stable classes compare only the endpoints (1985 vs 2025).
+// Growth classes compare consecutive GHS epochs to pinpoint the period
+// in which each pixel transitioned from non-built to built.
 var stableUrban    = urban1985.and(urban2025);
 var stableNonUrban = urban1985.not().and(urban2025.not());
 
@@ -161,7 +220,7 @@ Map.addLayer(celdaSel.style({color:'FFFFFF', fillColor:'00000000', width:2}),
 // ============================================================
 
 print('═══════════════════════════════════════════');
-print('  PASO 2: % de crecimiento en celda ' + celda_id);
+print('  STEP 2: Growth percentage in cell ' + celda_id);
 print('═══════════════════════════════════════════');
 
 var cellHistogram = urbanPeriodCell.reduceRegion({
@@ -228,7 +287,7 @@ print('Proporciones normalizadas de crecimiento:', growthNormalized);
 
 
 print('═══════════════════════════════════════════');
-print('  PASO 3: Generación de muestras nuevas');
+print('  STEP 3: Generation of new samples');
 print('═══════════════════════════════════════════');
 
 // Robust sampling function: oversample + sort random + limit
@@ -275,7 +334,7 @@ var growthPeriodLabelsJs = {
 // ============================================================
 
 print('═══════════════════════════════════════════');
-print('  PASO 4: PCA + filtrado ±2SD');
+print('  STEP 4: PCA + filtering ±2SD');
 print('═══════════════════════════════════════════');
 
 var mosaicPCA = mosaic1986.select(PCA_BANDS).clip(geom);
@@ -360,7 +419,7 @@ Map.addLayer(nonUrbanWithPCA.filter(ee.Filter.or(
 // ============================================================
 
 print('═══════════════════════════════════════════');
-print('  PASO 5: Muestra base — periodo estable');
+print('  STEP 5: Base sample — stable period');
 print('═══════════════════════════════════════════');
 
 var urbanSorted = urbanFiltered
@@ -464,10 +523,13 @@ print('  ► Exportación PCA sobrantes configurada');
 // ============================================================
 
 print('═══════════════════════════════════════════');
-print('  PASO 6: Incremento');
+print('  STEP 6: Increment');
 print('═══════════════════════════════════════════');
 
 // --- 6a. Urban extras: generate directly per period ---
+// Distributes EXTRA_URBAN (70) points across growth periods according
+// to their local proportion (growthNormalized), sampling directly from
+// each period's mask rather than pooling all growth pixels together.
 // A JS array is used to iterate (we need JS seeds for sampleFromMask)
 var extraUrbanList = growthOnlyKeysJs.map(function(k, i) {
   var code = parseInt(k);
@@ -542,7 +604,7 @@ var finalSamples = baseSamples
 // ============================================================
 
 print('═══════════════════════════════════════════');
-print('  RESUMEN FINAL — Celda ' + celda_id);
+print('  FINAL SUMMARY — Cell ' + celda_id);
 print('═══════════════════════════════════════════');
 
 var nUE = finalSamples.filter(ee.Filter.eq('tipo_muestra', 'urbano_estable')).size();
@@ -582,7 +644,7 @@ Map.addLayer(seedNonUrbanStable.style({color:'BDBDBD', pointSize:1}),
 // ============================================================
 
 print('═══════════════════════════════════════════');
-print('  PASO 7: Exportación');
+print('  STEP 7: Export');
 print('═══════════════════════════════════════════');
 
 Export.table.toAsset({
@@ -605,7 +667,8 @@ print('Tareas configuradas. Ejecutar desde la pestaña Tasks.');
 // ============================================================
 // BATCH EXPORT: ALL CELLS (this one is under testing)
 // ============================================================
-// Uncomment to generate tasks for each cell of the grid.
+// Runs only if RUN_BATCH = true (set in PARAMETERS above).
+// Generates tasks for each cell of the grid.
 // 2 assets are exported per cell:
 //   1. pca_sobrantes/celda_X → PCA leftovers (filtered - base) both classes
 //   2. expansion_v4/celda_X  → 900 final samples
@@ -617,132 +680,135 @@ print('Tareas configuradas. Ejecutar desde la pestaña Tasks.');
 //   var merged = ee.FeatureCollection(all).flatten();
 // ============================================================
 
+if (RUN_BATCH) {
 
-var cellIds = gridMx.aggregate_array('id');
-cellIds.evaluate(function(ids) {
-  print('Iniciando lote para ' + ids.length + ' celdas...');
+  var cellIds = gridMx.aggregate_array('id');
+  cellIds.evaluate(function(ids) {
+    print('Iniciando lote para ' + ids.length + ' celdas...');
 
-  ids.forEach(function(cid) {
-    var cellGeom = gridMx.filter(ee.Filter.eq('id', cid)).first().geometry();
-    var cellPeriod = urbanPeriodClass.clip(cellGeom);
+    ids.forEach(function(cid) {
+      var cellGeom = gridMx.filter(ee.Filter.eq('id', cid)).first().geometry();
+      var cellPeriod = urbanPeriodClass.clip(cellGeom);
 
-    // --- Local histogram ---
-    var cellHist = cellPeriod.reduceRegion({
-      reducer: ee.Reducer.frequencyHistogram(),
-      geometry: cellGeom, scale: 100, maxPixels: 1e13, bestEffort: true
-    });
-    var hist = ee.Dictionary(cellHist.get('periodo_urbano'));
+      // --- Local histogram ---
+      var cellHist = cellPeriod.reduceRegion({
+        reducer: ee.Reducer.frequencyHistogram(),
+        geometry: cellGeom, scale: 100, maxPixels: 1e13, bestEffort: true
+      });
+      var hist = ee.Dictionary(cellHist.get('periodo_urbano'));
 
-    // --- Normalized proportions ---
-    var localGrowthTotal = sumHistogramKeys(hist, growthOnlyKeys);
-    var localGrowthNorm = ee.Dictionary.fromLists(growthOnlyKeys,
-      growthOnlyKeys.map(function(k) {
-        return ee.Algorithms.If(localGrowthTotal.gt(0),
-          ee.Number(hist.get(k, 0)).divide(localGrowthTotal), ee.Number(0));
-      })
-    );
+      // --- Normalized proportions ---
+      var localGrowthTotal = sumHistogramKeys(hist, growthOnlyKeys);
+      var localGrowthNorm = ee.Dictionary.fromLists(growthOnlyKeys,
+        growthOnlyKeys.map(function(k) {
+          return ee.Algorithms.If(localGrowthTotal.gt(0),
+            ee.Number(hist.get(k, 0)).divide(localGrowthTotal), ee.Number(0));
+        })
+      );
 
-    // --- P3: Generate stable samples ---
-    function cellSample(mask, n, over, s) {
-      var wr = mask.selfMask().addBands(ee.Image.random(s).rename('random'));
-      return wr.sample({
-        region: cellGeom, scale: 100, numPixels: n * over, seed: s, geometries: true
-      }).sort('random').limit(n);
-    }
+      // --- P3: Generate stable samples ---
+      function cellSample(mask, n, over, s) {
+        var wr = mask.selfMask().addBands(ee.Image.random(s).rename('random'));
+        return wr.sample({
+          region: cellGeom, scale: 100, numPixels: n * over, seed: s, geometries: true
+        }).sort('random').limit(n);
+      }
 
-    var uStable = cellSample(cellPeriod.eq(1), SEED_SAMPLES, 50, SEED)
-      .map(function(f) { return f.set({periodo_urbano:1, periodo_label:'estable_urbano', value:1}); });
-    var nStable = cellSample(cellPeriod.eq(0), SEED_SAMPLES, 50, SEED + 1)
-      .map(function(f) { return f.set({periodo_urbano:0, periodo_label:'estable_no_urbano', value:0}); });
+      var uStable = cellSample(cellPeriod.eq(1), SEED_SAMPLES, 50, SEED)
+        .map(function(f) { return f.set({periodo_urbano:1, periodo_label:'estable_urbano', value:1}); });
+      var nStable = cellSample(cellPeriod.eq(0), SEED_SAMPLES, 50, SEED + 1)
+        .map(function(f) { return f.set({periodo_urbano:0, periodo_label:'estable_no_urbano', value:0}); });
 
-    // --- P4: dual PCA ±2SD ---
-    var mcPCA = lib_pca.addPC1Urban(mosaic1986.select(PCA_BANDS).clip(cellGeom), cellGeom);
+      // --- P4: dual PCA ±2SD ---
+      var mcPCA = lib_pca.addPC1Urban(mosaic1986.select(PCA_BANDS).clip(cellGeom), cellGeom);
 
-    var uPCA = mcPCA.sampleRegions({collection: uStable, scale: 30, geometries: true, tileScale: 16});
-    var nPCA = mcPCA.sampleRegions({collection: nStable, scale: 30, geometries: true, tileScale: 16});
+      var uPCA = mcPCA.sampleRegions({collection: uStable, scale: 30, geometries: true, tileScale: 16});
+      var nPCA = mcPCA.sampleRegions({collection: nStable, scale: 30, geometries: true, tileScale: 16});
 
-    // Urban ±2SD
-    var uStats = uPCA.reduceColumns({
-      reducer: ee.Reducer.mean().combine(ee.Reducer.stdDev(), null, true),
-      selectors: ['PC_urban']});
-    var uM = ee.Number(uStats.get('mean'));
-    var uS = ee.Number(uStats.get('stdDev'));
-    var uFilt = uPCA.filter(ee.Filter.and(
-      ee.Filter.gte('PC_urban', uM.subtract(uS.multiply(2))),
-      ee.Filter.lte('PC_urban', uM.add(uS.multiply(2)))));
+      // Urban ±2SD
+      var uStats = uPCA.reduceColumns({
+        reducer: ee.Reducer.mean().combine(ee.Reducer.stdDev(), null, true),
+        selectors: ['PC_urban']});
+      var uM = ee.Number(uStats.get('mean'));
+      var uS = ee.Number(uStats.get('stdDev'));
+      var uFilt = uPCA.filter(ee.Filter.and(
+        ee.Filter.gte('PC_urban', uM.subtract(uS.multiply(2))),
+        ee.Filter.lte('PC_urban', uM.add(uS.multiply(2)))));
 
-    // Non-urban ±2SD
-    var nStats = nPCA.reduceColumns({
-      reducer: ee.Reducer.mean().combine(ee.Reducer.stdDev(), null, true),
-      selectors: ['PC_urban']});
-    var nM = ee.Number(nStats.get('mean'));
-    var nS2 = ee.Number(nStats.get('stdDev'));
-    var nFilt = nPCA.filter(ee.Filter.and(
-      ee.Filter.gte('PC_urban', nM.subtract(nS2.multiply(2))),
-      ee.Filter.lte('PC_urban', nM.add(nS2.multiply(2)))));
+      // Non-urban ±2SD
+      var nStats = nPCA.reduceColumns({
+        reducer: ee.Reducer.mean().combine(ee.Reducer.stdDev(), null, true),
+        selectors: ['PC_urban']});
+      var nM = ee.Number(nStats.get('mean'));
+      var nS2 = ee.Number(nStats.get('stdDev'));
+      var nFilt = nPCA.filter(ee.Filter.and(
+        ee.Filter.gte('PC_urban', nM.subtract(nS2.multiply(2))),
+        ee.Filter.lte('PC_urban', nM.add(nS2.multiply(2)))));
 
-    // --- P5: Stable base ---
-    var uSorted = uFilt.randomColumn('_r', SEED).sort('_r');
-    var uBase = uSorted.limit(BASE_URBAN)
-      .map(function(f) { return f.set({tipo_muestra:'urbano_estable', paso:'base_estable', periodo_asignado:'estable_1985'}); });
-    var uLeft = uSorted.filter(ee.Filter.gt('_r',
-      uSorted.limit(BASE_URBAN).aggregate_max('_r')));
+      // --- P5: Stable base ---
+      var uSorted = uFilt.randomColumn('_r', SEED).sort('_r');
+      var uBase = uSorted.limit(BASE_URBAN)
+        .map(function(f) { return f.set({tipo_muestra:'urbano_estable', paso:'base_estable', periodo_asignado:'estable_1985'}); });
+      var uLeft = uSorted.filter(ee.Filter.gt('_r',
+        uSorted.limit(BASE_URBAN).aggregate_max('_r')));
 
-    var nSorted = nFilt.randomColumn('_r', SEED).sort('_r');
-    var nBase = nSorted.limit(BASE_NON_URBAN)
-      .map(function(f) { return f.set({tipo_muestra:'no_urbano_estable', paso:'base_estable', periodo_asignado:'estable_1985'}); });
-    var nLeft = nSorted.filter(ee.Filter.gt('_r',
-      nSorted.limit(BASE_NON_URBAN).aggregate_max('_r')));
+      var nSorted = nFilt.randomColumn('_r', SEED).sort('_r');
+      var nBase = nSorted.limit(BASE_NON_URBAN)
+        .map(function(f) { return f.set({tipo_muestra:'no_urbano_estable', paso:'base_estable', periodo_asignado:'estable_1985'}); });
+      var nLeft = nSorted.filter(ee.Filter.gt('_r',
+        nSorted.limit(BASE_NON_URBAN).aggregate_max('_r')));
 
-    var base = uBase.merge(nBase);
+      var base = uBase.merge(nBase);
 
-    // --- Export PCA leftovers (filtered - base) ---
-    var sobrantesPCA = uLeft.map(function(f) {
-      return f.set({tipo_muestra:'urbano_sobrante_pca', cell_id: cid});
-    }).merge(nLeft.map(function(f) {
-      return f.set({tipo_muestra:'no_urbano_sobrante_pca', cell_id: cid});
-    }));
-    Export.table.toAsset({
-      collection: sobrantesPCA,
-      description: 'pca_sobrantes_celda_' + cid,
-      assetId: 'projects/mapbiomas-mexico/assets/Urban/COLLECTION-1/Samples/pca_sobrantes/celda_' + cid
-    });
+      // --- Export PCA leftovers (filtered - base) ---
+      var sobrantesPCA = uLeft.map(function(f) {
+        return f.set({tipo_muestra:'urbano_sobrante_pca', cell_id: cid});
+      }).merge(nLeft.map(function(f) {
+        return f.set({tipo_muestra:'no_urbano_sobrante_pca', cell_id: cid});
+      }));
+      Export.table.toAsset({
+        collection: sobrantesPCA,
+        description: 'pca_sobrantes_celda_' + cid,
+        assetId: 'projects/mapbiomas-mexico/assets/Urban/COLLECTION-1/Samples/pca_sobrantes/celda_' + cid
+      });
 
-    // --- P6a: Urban growth extras ---
-    var extraUrbList = ['2','3','4','5','6','7','8','9'].map(function(k, i) {
-      var code = parseInt(k);
-      var prop = ee.Number(localGrowthNorm.get(k));
-      var nE = prop.multiply(EXTRA_URBAN).round().int();
-      var mask = cellPeriod.eq(code);
-      var wr = mask.selfMask().addBands(ee.Image.random(SEED + 20 + i).rename('random'));
-      return wr.sample({
-        region: cellGeom, scale: 100, numPixels: 5000, seed: SEED + 20 + i, geometries: true
-      }).sort('random').limit(nE)
-        .map(function(f) {
-          return f.set({
-            periodo_urbano: code, periodo_label: periodLabels.get(ee.Number(code).format('%d')),
-            value: 1, tipo_muestra: 'urbano_crecimiento',
-            paso: 'incremento_periodo_' + k,
-            periodo_asignado: periodLabels.get(ee.Number(code).format('%d'))
+      // --- P6a: Urban growth extras ---
+      var extraUrbList = ['2','3','4','5','6','7','8','9'].map(function(k, i) {
+        var code = parseInt(k);
+        var prop = ee.Number(localGrowthNorm.get(k));
+        var nE = prop.multiply(EXTRA_URBAN).round().int();
+        var mask = cellPeriod.eq(code);
+        var wr = mask.selfMask().addBands(ee.Image.random(SEED + 20 + i).rename('random'));
+        return wr.sample({
+          region: cellGeom, scale: 100, numPixels: 5000, seed: SEED + 20 + i, geometries: true
+        }).sort('random').limit(nE)
+          .map(function(f) {
+            return f.set({
+              periodo_urbano: code, periodo_label: periodLabels.get(ee.Number(code).format('%d')),
+              value: 1, tipo_muestra: 'urbano_crecimiento',
+              paso: 'incremento_periodo_' + k,
+              periodo_asignado: periodLabels.get(ee.Number(code).format('%d'))
+            });
           });
-        });
+      });
+      var extraUrb = ee.FeatureCollection(extraUrbList).flatten().limit(EXTRA_URBAN);
+
+      // --- P6b: Non-urban extras ---
+      var extraNoUrb = nLeft.limit(EXTRA_NON_URBAN)
+        .map(function(f) { return f.set({tipo_muestra:'no_urbano_extra', paso:'extra_no_urbano', periodo_asignado:'estable_1985'}); });
+
+      // --- Combine and export ---
+      var finalCell = base.merge(extraUrb).merge(extraNoUrb)
+        .map(function(f) { return f.set('cell_id', cid); });
+
+      Export.table.toAsset({
+        collection: finalCell,
+        description: 'expansion_v4_celda_' + cid,
+        assetId: 'projects/mapbiomas-mexico/assets/Urban/COLLECTION-1/Samples/expansion_v4/celda_' + cid
+      });
     });
-    var extraUrb = ee.FeatureCollection(extraUrbList).flatten().limit(EXTRA_URBAN);
 
-    // --- P6b: Non-urban extras ---
-    var extraNoUrb = nLeft.limit(EXTRA_NON_URBAN)
-      .map(function(f) { return f.set({tipo_muestra:'no_urbano_extra', paso:'extra_no_urbano', periodo_asignado:'estable_1985'}); });
-
-    // --- Combine and export ---
-    var finalCell = base.merge(extraUrb).merge(extraNoUrb)
-      .map(function(f) { return f.set('cell_id', cid); });
-
-    Export.table.toAsset({
-      collection: finalCell,
-      description: 'expansion_v4_celda_' + cid,
-      assetId: 'projects/mapbiomas-mexico/assets/Urban/COLLECTION-1/Samples/expansion_v4/celda_' + cid
-    });
+    print('Se crearon ' + (ids.length * 2) + ' tareas (' + ids.length + ' celdas × 2 assets)');
   });
 
-  print('Se crearon ' + (ids.length * 2) + ' tareas (' + ids.length + ' celdas × 2 assets)');
-});
+}
