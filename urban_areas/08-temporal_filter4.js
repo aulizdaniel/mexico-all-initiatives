@@ -32,6 +32,24 @@ Key difference from TF1–TF3:
 Adapted from: MapBiomas Argentina — 09 Temporal Filter 4
              (Luna Schteingart, Gonzalo Dieguez)
 
+Critical conventions:
+- getBand() uses server-side ee.Algorithms.If to check for missing bands,
+  same pattern as TF2/TF3 — reliable handling without a client-side
+  try/catch.
+- SKIP_EXISTING defaults to true here; since this script produces a single
+  national asset (not one per cell), toggle it off explicitly when a
+  re-export is intended.
+- URBAN_VALUE = 24 matches the reclassification convention carried over
+  from earlier pipeline stages.
+- validateFirstYear() exists specifically to prevent a base-year (1985)
+  false positive from propagating through EVERY subsequent year via the
+  cumulative maximum — this is the main safeguard against runaway
+  overestimation from this filter.
+- This is the most aggressive filter in the TF1–TF4 sequence: unlike
+  TF1–TF3, its effect is irreversible and permanent (once a pixel is
+  urban in year Y, it stays urban in all years > Y). Review the increment
+  statistics carefully before accepting the output.
+
 ================================================================================
 */
 
@@ -42,7 +60,7 @@ Adapted from: MapBiomas Argentina — 09 Temporal Filter 4
 var version       = 1;
 var YEAR_START    = 1985;
 var YEAR_END      = 2025;
-var SKIP_EXISTING = false;
+var SKIP_EXISTING = true;
 
 // ============================================================================
 // ASSET PATHS
@@ -411,6 +429,7 @@ print('════════════════════════�
 // TESTING — uncomment to test individual years without exporting
 // ============================================================================
 
-testVisualize(1985);   // first year (with validation)testVisualize(1995);   // early intermediate year — little yellow expected
-testVisualize(2010);   // intermediate year — moderate yellow
-testVisualize(2025);   // last year — more yellow (all accumulated history)
+// testVisualize(1985);   // first year (with validation)
+// testVisualize(1995);   // early intermediate year — little yellow expected
+// testVisualize(2010);   // intermediate year — moderate yellow
+// testVisualize(2025);   // last year — more yellow (all accumulated history)
