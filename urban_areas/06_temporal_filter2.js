@@ -21,6 +21,22 @@ Methodology:
 Adapted from: MapBiomas Argentina — 07 Temporal Filter 2
              (Luna Schteingart, Gonzalo Dieguez)
 
+Critical conventions:
+- getBand() uses server-side ee.Algorithms.If to check for missing bands
+  before selecting them — unlike the try/catch pattern used in earlier
+  pipeline stages (spatial filter, temporal filter 1), this DOES reliably
+  handle a missing year band without needing a client-side try/catch,
+  since the check happens as part of the EE computation graph itself.
+- The three year-type windows (intermediate/penultimate/last) exist because
+  the forward-looking window shrinks as YEAR_END is approached; thresholds
+  are relaxed accordingly (2/4 → 2/4 mixed → 1/3) rather than kept fixed,
+  to avoid over-penalizing recent years with less future context.
+- SKIP_EXISTING defaults to true here; since this script produces a single
+  national asset (not one per cell), toggle it off explicitly when a
+  re-export is intended.
+- URBAN_VALUE = 24 matches the reclassification convention carried over
+  from the spatial filter / temporal filter 1 stages.
+
 ================================================================================
 */
 
@@ -31,7 +47,7 @@ Adapted from: MapBiomas Argentina — 07 Temporal Filter 2
 var version    = 1;
 var YEAR_START = 1985;
 var YEAR_END   = 2025;
-var SKIP_EXISTING = false;
+var SKIP_EXISTING = true;
 
 // ============================================================================
 // ASSET PATHS
@@ -233,8 +249,7 @@ function processLast(year) {
     .set({
       'year':        year,
       'filter_type': 'last',
-      'rule':        'gte_1_of_3_backward_permissive',
-      'window':      [year - 2, year - 1, year]
+      'rule':        'gte_1_of_3_backward_permissive'
     });
 }
 
@@ -399,7 +414,7 @@ print('════════════════════════�
 // TESTING — uncomment to test individual years without exporting
 // ============================================================================
 
-testVisualize(2000);   // intermediate year
-testVisualize(2023);   // penultimate year
-testVisualize(2024);   // penultimate year
-testVisualize(2025);   // last year
+// testVisualize(2000);   // intermediate year
+// testVisualize(2023);   // penultimate year
+// testVisualize(2024);   // penultimate year
+// testVisualize(2025);   // last year
