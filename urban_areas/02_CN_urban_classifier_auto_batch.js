@@ -1,4 +1,66 @@
 
+/*
+================================================================================
+MAPBIOMAS MEXICO - URBAN CLASSIFICATION BATCH (v9), NORTH-CENTRAL (CENTRO-NORTE) REGION
+Collection 1 - Urban theme
+================================================================================
+Description:
+Runs the full urban classification pipeline per cell, for all cells in the
+"centro-norte" subzone (or a filtered subset via CELLS_FILTER). For each
+cell, trains one Random Forest classifier per time period, applies a
+bilateral (urban + non-urban) probability threshold, classifies every year
+within that period, and exports probability, binary classification, and
+threshold metadata as three separate assets per cell.
+
+Workflow (per cell, executed serially by processNextCell):
+  1. Determine a buffer around the cell (250 km, expanding to 500 km if the
+     nearby PCA validation pool is too small) to gather enough stable urban/
+     non-urban reference points for threshold calibration.
+  2. Pool training samples from the cell + its listed neighbors ('vecinos'),
+     split into a fixed stable-urban base and a randomly sorted stable
+     non-urban pool.
+  3. For each period in PERIODOS_DEF:
+     a. Build a balanced training set (urban base + growth samples up to
+        that period's maxPeriodo, non-urban sampled at RATIO:1).
+     b. Train a Random Forest classifier on the period's trainingYear mosaic.
+     c. Calculate a bilateral threshold (calcThresholdSS) from PCA-validated
+        urban/non-urban points, combined via THRESHOLD_STRATEGY and bounded
+        by THRESHOLD_FLOOR/THRESHOLD_MARGIN.
+     d. Classify every year in [yearStart, yearEnd] using that classifier
+        and threshold.
+  4. Stack all yearly probability/classification bands and export as two
+     multi-band images, plus a FeatureCollection with one threshold record
+     per period.
+
+Critical conventions:
+- Buffer escalation: cells with too few nearby PCA points fall back from
+  BUFFER_KM_1 (250 km) to BUFFER_KM_2 (500 km); cells still short on points
+  after that are skipped entirely (see processNextCell).
+- Bilateral threshold (calcThresholdSS) computes t_urb (low-tail percentile
+  of urban probabilities) and t_nourb (high-tail percentile of non-urban
+  probabilities), combines them per THRESHOLD_STRATEGY ('max' by default),
+  then adds THRESHOLD_MARGIN and floors at THRESHOLD_FLOOR.
+- calcThresholdSS and submitCellTasks are written to avoid client-side
+  .evaluate() calls internally — thresholds are lazy ee.Number objects
+  resolved only when GEE runs the export tasks, not when tasks are queued.
+- maskCompuesta requires the reference band to be valid across ALL period
+  refYear mosaics simultaneously, to avoid training on partially masked data.
+- Bands (33 total) combine arid spectral indices and GLCM texture metrics
+  over two window sizes (5x5, 11x11) on the NIR band — this "extended" band
+  set is tagged as band_variant: 'C-extendida' in export metadata.
+- SKIP_EXISTING checks for an existing probabilities asset per cell before
+  reprocessing — safe to re-run the script after a partial batch failure.
+- PREVIEW_ONLY / PREVIEW_N let you sanity-check a couple of cells before
+  launching the full batch; always confirm PREVIEW_ONLY = false only after
+  reviewing preview output.
+
+Output (per cell):
+  - .../Probabilities/proba_{region}_{cell}_{yearStart}_{yearEnd}_C_v{version}
+  - .../Classification/class_{region}_{cell}_{yearStart}_{yearEnd}_C_v{version}
+  - .../Umbrales/umbrales_{region}_{cell}_{yearStart}_{yearEnd}_C_v{version}
+================================================================================
+*/
+
 // ============================================================================
 // BATCH PARAMETERS
 // ============================================================================
@@ -6,7 +68,7 @@
 var PREVIEW_ONLY  = false;   // true = only processes PREVIEW_N cells to verify
 var PREVIEW_N     = 2;       // number of cells in preview mode
 var SKIP_EXISTING = true;    // true = skips cells with an existing probabilities asset
-var CELLS_FILTER  = Array.apply(null, {length: 136}).map(function(_, i) { return i + 1; });; // [103,100];
+var CELLS_FILTER  = Array.apply(null, {length: 136}).map(function(_, i) { return i + 1; }); // [103,100];
 // ============================================================================
 // CLASSIFICATION PARAMETERS
 // ============================================================================
@@ -18,6 +80,10 @@ var RATIO      = 2;
 var SUBZONA    = 'centro-norte';
 var regionName = 'centro_norte';
 
+// Time blocks for training: each period trains one classifier on its
+// trainingYear/refYear mosaic, then applies it to classify every year
+// within [yearStart, yearEnd]. maxPeriodo caps which growth-sample
+// periods (from Step 6 of the sampling script) are included in training.
 var PERIODOS_DEF = [
   { yearStart: 1985, yearEnd: 1995, trainingYear: 1995, refYear: 1995, maxPeriodo: 3 },
   { yearStart: 1996, yearEnd: 2000, trainingYear: 2000, refYear: 2000, maxPeriodo: 4 },
@@ -225,7 +291,9 @@ function submitCellTasks(cid, geomCelda, bufGeom, bufKm, logPrefix) {
     .filter(ee.Filter.eq('value', 0))
     .randomColumn('_sort', cid);
 
-  // ── Loop over periods (synchronous — no callbacks) ───────────────────────
+  // Trains one classifier per period and classifies all years in that
+  // period's range. Runs synchronously (no evaluate/callbacks) so the whole
+  // cell can be processed and its exports queued in a single pass.
   var probaStack     = [];
   var classStack     = [];
   var threshFeatures = [];
@@ -432,7 +500,10 @@ function processNextCell(cellIds, idx) {
     .filter(ee.Filter.eq('periodo_label', LABEL_URB_PCA))
     .filterBounds(geomBuf2);
 
-  // Evaluate counts in both buffers in a single roundtrip (only evaluate per cell)
+  // Counts nearby PCA points in both candidate buffers in a single
+  // server roundtrip, then picks the smallest buffer that meets
+  // MIN_SAMPLES_PCA (falling back to the larger buffer, or skipping
+  // the cell entirely if neither has enough points).
   ee.Dictionary({
     n1: pcaUrbFull.filterBounds(geomBuf1).size(),
     n2: pcaUrbFull.size()
