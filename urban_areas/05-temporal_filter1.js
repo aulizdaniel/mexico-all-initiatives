@@ -3,7 +3,43 @@
 MAPBIOMAS MEXICO — TEMPORAL FILTER 1 (TEMPORAL CONSISTENCY)
 Collection 1 · v0.01
 ================================================================================
-...
+Description:
+  Merges Centro Norte and Centro Sur spatially-filtered classifications into
+  a single national mosaic, then applies a temporal consistency filter per
+  year: a pixel is kept as urban only if it agrees with a majority of its
+  neighboring years within a moving window, removing isolated single-year
+  noise from the time series. Outputs one multiband asset (1985-2025,
+  41 bands) covering the whole country.
+
+Temporal filter rules (per pixel, per year):
+  - First 2 years:  urban if ≥2 of 3 (current + next 2 years)
+  - Last 2 years:   urban if ≥2 of 3 (previous 2 years + current)
+  - Middle years:   urban if ≥3 of 5 (2 years before/after, centered)
+
+Input zones:
+  - Centro Sur   (cells 137-219): Classification/urban_spatial_filtered_*
+  - Centro Norte (cells 1-136):   SpatialFilter/urban_spatial_filtered_centro_norte_*
+  Both zones are mosaicked per year before the temporal filter is applied
+  (Centro Norte on top, per ee.ImageCollection.mosaic() list order — see
+  loadSpatialFiltered).
+
+Critical conventions:
+- KNOWN LIMITATION (to fix in Collection 2): the try/catch blocks around
+  ee.Image(...).select(...) in loadSpatialFiltered/loadSpatialFilteredRaw
+  do NOT reliably catch missing-asset errors, since these EE calls are lazy
+  and only fail server-side at export time. A missing year/zone asset will
+  surface as an export failure on the full multiband image, not as a
+  per-zone warning during script execution — harder to trace than in the
+  per-cell pipelines upstream.
+- SKIP_EXISTING defaults to true here; since this script produces a single
+  national asset (not one per cell), toggle it off explicitly when a
+  re-export is intended.
+- URBAN_VALUE = 24 matches the reclassification convention from the spatial
+  filter step (0 = non-urban, 24 = urban, 27 = no-data).
+
+Output:
+  - .../Temporal_Filter_1/urban_temporal_filter1_{yearStart}_{yearEnd}_v{version}
+================================================================================
 */
 
 // ============================================================================
@@ -13,7 +49,7 @@ Collection 1 · v0.01
 var version    = 1;
 var YEAR_START = 1985;
 var YEAR_END   = 2025;
-var SKIP_EXISTING = false;
+var SKIP_EXISTING = true;
 
 // ============================================================================
 // ASSET PATHS
@@ -178,7 +214,7 @@ function loadSpatialFilteredRaw(year) {
 }
 
 // ============================================================================
-// TEMPORAL FILTER LOGIC — unchanged
+// TEMPORAL FILTER LOGIC
 // ============================================================================
 
 function applyTemporalFilter(year) {
@@ -223,7 +259,7 @@ function applyTemporalFilter(year) {
 }
 
 // ============================================================================
-// MAIN PROCESSING — unchanged
+// MAIN PROCESSING
 // ============================================================================
 
 function buildMultibandImage() {
@@ -263,7 +299,7 @@ function buildMultibandImage() {
 }
 
 // ============================================================================
-// EXPORT — unchanged
+// EXPORT
 // ============================================================================
 
 function exportResult(multibandImage) {
@@ -334,6 +370,6 @@ if (!outputAlreadyExists) {
 print('═══════════════════════════════════════════════════════');
 
 // ── Testing ──────────────────────────────────────────────────────────────────
-testVisualize(2000);
-testVisualize(1986);
-testVisualize(2025);
+// testVisualize(2000);
+// testVisualize(1986);
+// testVisualize(2025);
