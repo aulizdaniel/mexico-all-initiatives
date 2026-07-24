@@ -1,10 +1,10 @@
 /*
 ================================================================================
-MAPBIOMAS MEXICO - BASE MOSAICS, CENTRO-SUR REGION
+MAPBIOMAS MEXICO - BASE MOSAICS, SOUTH-CENTRAL REGION
 Collection 1 - Urban theme
 ================================================================================
 Description:
-Generates annual base mosaics for the "centro-sur" subzone of the
+Generates annual base mosaics for the South-Central (Centro-Sur) subzone of the
 geostatistical grid, using the mosaic production module inherited from
 MapBiomas Brasil (Col10):
   users/edimilsonrodriguessantos/mapbiomas:Col10/classificacao/mosaic_production.js

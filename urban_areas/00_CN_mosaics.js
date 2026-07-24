@@ -1,11 +1,11 @@
 /*
 ================================================================================
-MAPBIOMAS MEXICO - ENRICHED MOSAICS, CENTRO-NORTE REGION
+MAPBIOMAS MEXICO - ENRICHED MOSAICS, NORTH-CENTRAL REGION
 Collection 1 - Urban theme
 ================================================================================
 
 Description:
-Generates annual mosaics for the "centro-norte" subzone of the geostatistical
+Generates annual mosaics for the North-Central (Centro-Norte) subzone of the geostatistical
 grid, adding to the base production mosaic the following blocks of variables
 inherited from the comparative test v0.08:
 
