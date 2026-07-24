@@ -28,6 +28,19 @@ Key difference from TF1 and TF2:
 Adapted from: MapBiomas Argentina — 08 Temporal Filter 3
              (Luna Schteingart, Gonzalo Dieguez)
 
+Critical conventions:
+- getBand() uses server-side ee.Algorithms.If to check for missing bands
+  before selecting them, same pattern as Temporal Filter 2 — reliable
+  handling of a missing year band without a client-side try/catch.
+- SKIP_EXISTING defaults to true here; since this script produces a single
+  national asset (not one per cell), toggle it off explicitly when a
+  re-export is intended.
+- URBAN_VALUE = 24 matches the reclassification convention carried over
+  from the spatial filter / temporal filter 1-2 stages.
+- Unlike TF1/TF2 (which only remove pixels, shrinking urban area), TF3
+  ADDS pixels by filling one-year gaps — expect urban area to grow by
+  roughly +2 to +5% relative to the TF2 input.
+
 ================================================================================
 */
 
@@ -38,7 +51,7 @@ Adapted from: MapBiomas Argentina — 08 Temporal Filter 3
 var version       = 1;
 var YEAR_START    = 1985;
 var YEAR_END      = 2025;
-var SKIP_EXISTING = false;
+var SKIP_EXISTING = true;
 
 // ============================================================================
 // ASSET PATHS
@@ -417,7 +430,7 @@ print('════════════════════════�
 // TESTING — uncomment to test individual years without exporting
 // ============================================================================
 
-testVisualize(1985);   // first year (no filling)
-testVisualize(2000);   // intermediate year
-testVisualize(2010);   // intermediate year
-testVisualize(2025);   // last year (continuity)
+// testVisualize(1985);   // first year (no filling)
+// testVisualize(2000);   // intermediate year
+// testVisualize(2010);   // intermediate year
+// testVisualize(2025);   // last year (continuity)
