@@ -16,7 +16,18 @@ Description:
 Adapted from: MapBiomas Argentina — 05 Spatial Filter
              (Luna Schteingart, Gonzalo Dieguez)
 
-Zone: CENTRO NORTE — cells 1 to 136
+Zone: North-Center — cells 1 to 136
+
+Critical conventions:
+- Reclassification values: 0 = non-urban, 24 = urban, 27 = no-data/no-coverage
+  (kept where the original classification had no valid pixel).
+- Export has no explicit `region` — relies on the mosaic's own footprint,
+  which comes from the upstream per-cell classification already being
+  clipped to each cell's geometry.
+- The per-cell try/catch in processYear does NOT reliably catch missing-
+  asset errors, since ee.Image() and .select() are lazy — errors from a
+  missing cell asset will surface later, as an export task failure, not
+  as a caught exception here.
 
 ================================================================================
 */
@@ -310,4 +321,4 @@ print('════════════════════════�
 // TESTING — uncomment to test a single year without exporting
 // ============================================================================
 
-testVisualize(2000);
+// testVisualize(2000);

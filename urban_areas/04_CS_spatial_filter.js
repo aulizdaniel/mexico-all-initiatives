@@ -15,7 +15,17 @@ Description:
 
 Adapted from: MapBiomas Argentina — 05 Spatial Filter
              (Luna Schteingart, Gonzalo Dieguez)
-Zone: CENTRO NORTE — cells 137 to 219
+Zone: South-Center — cells 137 to 219
+
+Critical conventions:
+- Output folder is intentionally Classification/, not SpatialFilter/ (as
+  used by the Centro Norte counterpart) — kept this way to distinguish
+  this product's origin/lineage within the repository.
+- Reclassification values: 0 = non-urban, 24 = urban, 27 = no-data/no-coverage
+  (kept where the original classification had no valid pixel).
+- Export has no explicit `region` — relies on the mosaicked cells' own
+  footprint (see commented fallback near Export.image.toAsset if this
+  causes issues).
 ================================================================================
 */
 
@@ -386,4 +396,4 @@ print('════════════════════════�
 // TESTING — uncomment to test a single year without exporting
 // ============================================================================
 
-testVisualize(2000);
+// testVisualize(2000);
