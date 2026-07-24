@@ -1,8 +1,54 @@
-// ============================================================================
-// MAPBIOMAS MEXICO — URBAN CLASSIFICATION WITH RANDOM FOREST
-// Collection 1 · v0.01
-// Per-period thresholds · Natural Color mosaics · Threshold export
-// ============================================================================
+/*
+================================================================================
+MAPBIOMAS MEXICO - URBAN CLASSIFICATION, SINGLE CELL (CENTRO-SUR)
+Collection 1 - Urban theme · v0.01
+================================================================================
+Description:
+Classifies urban probability and binary urban/non-urban extent for ONE grid
+cell (celda_id) across the full 1985-2025 time series, using a Random Forest
+classifier trained separately per period. 
+
+Unlike the CENTRO-NORTE batch pipeline, which computes an automatic
+bilateral threshold per period via PCA-validated reference points, this
+script uses a MANUALLY DEFINED threshold per period (THRESHOLDS array).
+Intended for single-cell testing/calibration before adopting or comparing
+against the automatic threshold approach.
+
+Workflow:
+  1. Load the target cell + its listed neighbors ('vecinos') to pool
+     training samples from a wider area than the cell alone.
+  2. Build periods: a first period covering only YEAR_START (stable
+     samples only), then consecutive PERIOD_STEP-year blocks (default 5)
+     up to YEAR_END. Each period is trained on its own trainingYear mosaic
+     and assigned one threshold from THRESHOLDS.
+  3. Per period: assemble a balanced training set (urban stable + growth
+     samples up to that period, non-urban at RATIO:1), train a Random
+     Forest, and classify every year within the period.
+  4. Stack yearly probability/classification bands; export as two
+     multi-band images plus a FeatureCollection of per-period thresholds.
+  5. Visualize mosaic / probability / thresholded binary layers for the
+     years listed in year_viz, with a gradient legend on the map.
+
+Critical conventions:
+- THRESHOLDS[0] is shared by BOTH the first period (YEAR_START alone) and
+  the first 5-year block (see period-construction loop) — 8 threshold
+  values cover 9 periods total by design, not a mismatch.
+- BUFFER_KM here (2 km) is a LOCAL buffer for filtering samples/mosaic
+  around the cell — not to be confused with the much larger PCA-search
+  buffers (250/500 km) used in the CENTRO-NORTE batch script.
+- Bands (42 total): raw reflectance + spectral indices (vegetation, water,
+  built-up/urban, soil, burn) + SMA fractions (two independent unmixing
+  models) + temporal percentile statistics (EVI, EVI2, EBBI). See ATBD for
+  full definitions.
+- year_viz controls which years get map layers added (mosaic, probability,
+  thresholded binary) — does not affect which years are classified/exported.
+
+Output:
+  - .../Probabilities/proba_{cell}_{yearStart}_{yearEnd}_v{version}
+  - .../Classification/class_{cell}_{yearStart}_{yearEnd}_v{version}
+  - .../Umbrales/umbrales_{cell}_{yearStart}_{yearEnd}_v{version}
+================================================================================
+*/
 
 // ============================================================================
 // PARAMETERS — EDIT HERE
@@ -53,7 +99,10 @@ if (THRESHOLDS.length < N_PERIODOS_CREC) {
                   ' valores. Actual: ' + THRESHOLDS.length);
 }
 
-// --- Build periods with an assigned threshold ---
+// Build periods with an assigned threshold.
+// Period 0 covers YEAR_START alone (stable samples only); subsequent
+// periods are PERIOD_STEP-year blocks, each with its own trainingYear
+// and threshold.
 var PERIODOS = [];
 
 // Period 0: only stable pixels (1985), uses threshold [0]
@@ -196,6 +245,9 @@ var noUrbPool = samplesAll.filter(ee.Filter.eq('value', 0))
 // 3. BALANCED SAMPLES PER PERIOD (ratio 1:2)
 // ============================================================================
 
+// Urban samples accumulate across periods (stable + growth increments up
+// to maxPeriodo); non-urban is re-sampled at RATIO:1 against that total,
+// so the non-urban pool grows along with the urban one.
 function getSamplesByPeriod(maxPeriodo) {
   var urbTotal;
 
@@ -285,6 +337,8 @@ function runClassification() {
   var probaStack = [];
   var classStack = [];
 
+  // Trains one classifier per period, then classifies every year in that
+  // period with the same classifier and the period's fixed threshold.
   PERIODOS.forEach(function(periodo) {
 
     var yearsInPeriod = [];
